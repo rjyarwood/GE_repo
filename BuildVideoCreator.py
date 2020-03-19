@@ -5,6 +5,8 @@ import time
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from PPMManipulatorForVid import PPMManipulatorForVid
+from reflection_remover import ReflectionRemover
+from Stitcher import stitcher 
 
 # Print iterations progress
 def printProgressBar (iteration, total, prefix = '', suffix = '', decimals = 1, length = 100, fill = '█', printEnd = "\r"):
@@ -74,7 +76,7 @@ class NpVidViewer:
         @Params:
             file_name (str)         - Required  : Name of the numpy file that contains the thermal cam temps.
             melt_pool_data (str)    - Required  : Name of the numpy file that contains the melt pool data.
-            tc_times (str)          - Required  : Name of the numpy file that contains the thermal camera timestamps.\
+            tc_times (str)          - Required  : Name of the numpy file that contains the thermal camera timestamps.
             window_name (str)       - Optional  : Name of the window that the video will be displayed in.
             remove_reflection (bool)- Optional  : Run the remove reflection function if true.
             remove_lower (bool)     - Optional  : Run the remove_lower reflection function if true.
@@ -86,21 +88,30 @@ class NpVidViewer:
         self._remove_reflection = remove_reflection
         self._remove_lower = remove_lower
         self._dims = (row, col)
+        self.ROI = ROI
+        self._ROIs = []
+        
 
-        if(ROI):
-            for x in range(row * col):
-                self._ROIs.append(np.load(file_name + "/ROI_" + (x-1), mmap_mode="r", allow_pickle=True)
+        if(self.ROI):
+            for x in range(int(row) * int(col)):
+                self._ROIs.append(np.load(filename +"/ROI_" + str(x) + "/Thermal_Camera/thermal_cam_temps.npy" , mmap_mode="r", allow_pickle=True))
         else:
-            self._array = np.load(filename, mmap_mode="r", allow_pickle=True)
+            self._array = np.load(filename + "/Thermal_Camera/thermal_cam_temps.npy", mmap_mode="r", allow_pickle=True)
 
         self._speed = 1
         self._window_name = window_name
-        self._num_frames = self.array.shape[0]
-        self._timestamps = np.load(tc_times, allow_pickle=True)
-        if melt_pool_data is not None:
-            self._melt_pool_data = np.load(melt_pool_data, allow_pickle=True)
+        if ROI:
+            self._num_frames = self._ROIs[1].shape[0]
         else:
-            self._melt_pool_data = None
+            self._num_frames = self._array.shape[0]
+
+        self._timestamps = np.load(tc_times, allow_pickle=True)
+
+        if melt_pool_data is not False and ROI:
+            for x in range(len(self._ROIs)):
+                self._melt_pool_data = np.load(filename +"/ROI_" + str(x) + melt_pool_data, allow_pickle=True)
+        elif melt_pool_data is not False:
+            self._melt_pool_data = np.load(melt_pool_data, allow_pickle=True)
 
         self._mp_data_index = 0
         self.match_vid_to_meltpool()
@@ -319,7 +330,13 @@ class NpVidViewer:
         normalized_img
             Numpy array of the updated image of the current frame.
         """
-        img = self.array[frame]
+        
+        if(self.ROI):
+            obj = stitcher(self._ROIs, frame)
+            img = obj.start()
+        else:
+            img = self.array[frame]
+           
         normalized_img = img.copy()
         if self.remove_reflection:
             ReflectionRemover.remove(
@@ -329,6 +346,10 @@ class NpVidViewer:
                 remove_lower=True,
                 lower_bounds=self.lower_bounds,
             )
+        
+        errorObj = PPMManipulatorForVid(normalized_img)
+        errorObj.findErrorsArray()
+        normalized_img = errorObj.drawErrors()
 
         normalized_img = cv2.normalize(normalized_img, normalized_img, 0, 255,
                                        cv2.NORM_MINMAX, cv2.CV_8UC1)
@@ -337,7 +358,7 @@ class NpVidViewer:
 
         self.add_mp_data_to_img(normalized_img, frame)
 
-        self.print_info(frame)
+        #self.print_info(frame)
         return normalized_img
 
     def add_mp_data_to_img(self, img, frame):
@@ -403,10 +424,11 @@ class NpVidViewer:
         while True:
             key = cv2.waitKey(self.speed)
             if not pause:
+                    
                 img = self.update_image(frame)
-                image = PPMManipulatorForVid(img)
                 
                 cv2.imshow(self.window_name, img)
+                printProgressBar(frame,self._num_frames)
                 frame = frame + 1
             elif pause:
                 if key == ord("s"):
